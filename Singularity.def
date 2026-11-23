@@ -1,0 +1,38 @@
+# Apptainer/Singularity container for ts-forecaster: Python 3.10, TensorFlow 2.13.0,
+# CUDA 11.8 / cuDNN 8.6 (NVIDIA pip packages), pinned versions from requirements.txt.
+#
+# Build (from the repository root):
+#   apptainer build ts-forecaster.sif Singularity.def
+# Run:
+#   apptainer exec --nv ts-forecaster.sif python3 run.py --config configs/examples/grws_leggatt.yaml
+Bootstrap: docker
+From: ubuntu:22.04
+
+%files
+	requirements.txt /opt/ts-forecaster/requirements.txt
+
+%post
+	export DEBIAN_FRONTEND=noninteractive
+	apt-get update && apt-get install -y --no-install-recommends python3 python3-pip git
+	rm -rf /var/lib/apt/lists/*
+	python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+	python3 -m pip install --no-cache-dir -r /opt/ts-forecaster/requirements.txt
+
+	# Point TensorFlow at the CUDA/cuDNN libraries installed by pip
+	NV=$(python3 -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
+	LIBS=$(ls -d "$NV"/*/lib | paste -sd: -)
+	echo "export LD_LIBRARY_PATH=$LIBS\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" >> $APPTAINER_ENVIRONMENT
+	echo "export PATH=$NV/cuda_nvcc/bin:\$PATH" >> $APPTAINER_ENVIRONMENT
+	echo "export XLA_FLAGS=--xla_gpu_cuda_data_dir=$NV/cuda_nvcc" >> $APPTAINER_ENVIRONMENT
+
+%environment
+	export PYTHONUNBUFFERED=1
+	export PYTHONNOUSERSITE=1    # ignore packages in the host's ~/.local (the home folder is mounted)
+	export TF_CPP_MIN_LOG_LEVEL=2
+
+%labels
+	Author Jason Kemp
+	Description "ts-forecaster: Python 3.10, TensorFlow 2.13.0, CUDA 11.8, pinned dependencies."
+
+%runscript
+	exec python3 "$@"

@@ -1,0 +1,22 @@
+# Leggatt gauge (Grand River, Ontario): forecast the next 12 hours of river flow
+# from the previous 72 hours of flow, stage and weather.
+#   python run.py --config configs/examples/grws_leggatt.yaml
+run:
+  name: grws_leggatt
+data:
+  file: data/grws/Parquet/Leggatt_closest.parquet
+  label_tag: _Flow
+  input_length: 72
+  output_length: 12
+  change_columns: ["-HG-"]     # also the 1-hour change of the river stage (change_lags 1,3,6 is the default)
+model:
+  units_per_layer: 32
+  dropout_rate: 0.25
+training:
+  loss_function: mae
+  batch_size: 128
+  max_epochs: 10
+  min_epochs: 3
+  patience: 3
+evaluation:
+  metrics: [core, hydrology, peaks]

@@ -1,0 +1,20 @@
+# Beijing air quality (Nongzhanguan station): forecast the next 24 hours of PM2.5
+# from the previous 72 hours of pollutants and weather.
+#   python run.py --config configs/examples/air_quality.yaml
+run:
+  name: air_quality
+data:
+  file: data/air_quality/Nongzhanguan.parquet
+  input_length: 72
+  output_length: 24
+  time_features: [time_of_day, day_of_week, day_of_year]
+model:
+  units_per_layer: 32
+  dropout_rate: 0.2
+training:
+  batch_size: 128
+  max_epochs: 10
+  min_epochs: 3
+  patience: 3
+evaluation:
+  seasonal_period: 24

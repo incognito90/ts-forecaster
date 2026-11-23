@@ -1,0 +1,37 @@
+{
+  "description": "Default search space: separate input and hidden dropout, log-scale ranges for regularisation, noise, learning rate and gradient clipping, Huber removed (identical to MSE/2 for minmax-scaled targets), 1-3 layers. Order matters: Optuna samples entries top to bottom. Settings not listed use the command-line value. See search_space.py for the format.",
+  "parameters": [
+    {"name": "num_layers", "type": "int", "low": 1, "high": 3},
+    {"name": "n_units_exponent", "type": "int", "low": 5, "high": 9},
+    {"name": "dropout_rate", "type": "float", "low": 0.0, "high": 0.5},
+    {"name": "use_input_dropout", "type": "categorical", "choices": [false, true]},
+    {"name": "input_dropout", "type": "float", "low": 0.05, "high": 0.3, "only_if": "use_input_dropout"},
+    {"name": "loss", "type": "categorical", "choices": ["mse", "mae", "nse"]},
+
+    {"name": "use_l1", "type": "categorical", "choices": [true, false]},
+    {"name": "l1_regularization", "type": "float", "low": 1e-10, "high": 1e-4, "log": true, "only_if": "use_l1"},
+    {"name": "use_l2", "type": "categorical", "choices": [true, false]},
+    {"name": "l2_regularization", "type": "float", "low": 1e-10, "high": 1e-4, "log": true, "only_if": "use_l2"},
+
+    {"name": "use_recurrent_l1_regularization", "type": "categorical", "choices": [true, false]},
+    {"name": "recurrent_l1_regularization", "type": "float", "low": 1e-10, "high": 1e-4, "log": true, "only_if": "use_recurrent_l1_regularization"},
+    {"name": "use_recurrent_l2_regularization", "type": "categorical", "choices": [true, false]},
+    {"name": "recurrent_l2_regularization", "type": "float", "low": 1e-10, "high": 1e-4, "log": true, "only_if": "use_recurrent_l2_regularization"},
+
+    {"name": "use_dense_l1_regularization", "type": "categorical", "choices": [true, false]},
+    {"name": "dense_l1_regularization", "type": "float", "low": 1e-10, "high": 1e-4, "log": true, "only_if": "use_dense_l1_regularization"},
+    {"name": "use_dense_l2_regularization", "type": "categorical", "choices": [true, false]},
+    {"name": "dense_l2_regularization", "type": "float", "low": 1e-10, "high": 1e-4, "log": true, "only_if": "use_dense_l2_regularization"},
+
+    {"name": "batch_norm", "type": "categorical", "choices": [true, false]},
+    {"name": "use_noise", "type": "categorical", "choices": [false, true]},
+    {"name": "noise", "type": "float", "low": 1e-5, "high": 1e-2, "log": true, "only_if": "use_noise"},
+    {"name": "patience", "type": "int", "low": 5, "high": 12},
+
+    {"name": "set_learning_rate", "type": "categorical", "choices": [false, true]},
+    {"name": "learning_rate", "type": "float", "low": 1e-4, "high": 3e-3, "log": true, "only_if": "set_learning_rate"},
+
+    {"name": "use_gradient_clip", "type": "categorical", "choices": [true, false]},
+    {"name": "gradient_clip", "type": "float", "low": 0.01, "high": 10.0, "log": true, "only_if": "use_gradient_clip"}
+  ]
+}

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Run outputs
+outputs/
+imputer_time.csv
+*.sif
+
+# Downloaded GRWS gauges (scripts/download_grws.py); only the two examples are tracked
+data/grws/Parquet/*
+!data/grws/Parquet/Doon_closest.parquet
+!data/grws/Parquet/Leggatt_closest.parquet
