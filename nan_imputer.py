@@ -207,7 +207,7 @@ class NaNImputer:
 	def _interpolate(self, df):
 		df = df.select_dtypes(include=[np.number])	# ensure no datetime slips in
 		df = df.interpolate(method="linear")
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 
 	def _min_std_impute(self, df,denominator=1):
@@ -228,8 +228,8 @@ class NaNImputer:
 		features = df.drop(columns=[self.time_index_column], errors='ignore')
 		features = features.set_index(time_values)
 		features = features.interpolate(method="time")
-		features.reset_index(drop=True, inplace=True)
-		features = features.fillna(method="ffill").fillna(method="bfill")
+		features = features.reset_index(drop=True)
+		features = features.ffill().bfill()
 		features[self.time_index_column] = time_values.reset_index(drop=True)
 		cols = [self.time_index_column] + [col for col in features.columns if col != self.time_index_column]
 
@@ -242,32 +242,32 @@ class NaNImputer:
 				df[column] = df[column].interpolate(method="linear")
 			else:
 				df[column] = df[column].interpolate(method="polynomial", order=order)
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 
 	def _interpolate_spline(self, df):
 		df = df.interpolate(method="spline", order=self.kwargs.get("order", 2))
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 
 	def _mean_previous_next(self, df):
 		df = df.apply(lambda x: x.fillna((x.shift() + x.shift(-1)) / 2))
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 
 	def _rolling_mean_impute(self, df, window):
 		df = df.fillna(df.rolling(window=window, min_periods=1).mean())
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 
 	def _knn_impute(self, df):
 		df = pd.DataFrame(self.model_.transform(df), columns=df.columns, index=df.index)
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 
 	def _mice_impute(self, df):
 		df = pd.DataFrame(self.model_.transform(df), columns=df.columns, index=df.index)
-		df = df.fillna(method="ffill").fillna(method="bfill")
+		df = df.ffill().bfill()
 		return df
 		
 	def _kalman_fit(self, features):
@@ -418,7 +418,7 @@ class NaNImputer:
 		# 4) assemble result column-wise
 		out = df.copy()
 		for col in df.columns:
-			col_vals = out[col].values
+			col_vals = out[col].to_numpy(copy=True)
 			# where singleton NaN → take MissForest value
 			sel_single = singleton_mask[col].values
 			col_vals[sel_single] = mf_imputed[col].values[sel_single]
@@ -429,7 +429,7 @@ class NaNImputer:
 
 		# 5) sanity: if any NaNs remain (e.g., columns entirely NaN), back/forward fill as last resort
 		if out.isna().values.any():
-			out = out.fillna(method="ffill").fillna(method="bfill")
+			out = out.ffill().bfill()
 		return out
 
 	def _kalman_singleton_minstd_impute(self, df, denominator=1):
@@ -450,7 +450,7 @@ class NaNImputer:
 		# 4) assemble result column-wise
 		out = df.copy()
 		for col in df.columns:
-			col_vals = out[col].values
+			col_vals = out[col].to_numpy(copy=True)
 			# where singleton NaN → take Kalman value
 			sel_single = singleton_mask[col].values
 			col_vals[sel_single] = kalman_imputed[col].values[sel_single]
@@ -460,5 +460,5 @@ class NaNImputer:
 			out[col] = col_vals
 		# 5) sanity: if any NaNs remain (e.g., columns entirely NaN), back/forward fill as last resort
 		if out.isna().values.any():
-			out = out.fillna(method="ffill").fillna(method="bfill")
+			out = out.ffill().bfill()
 		return out

@@ -7,8 +7,23 @@ Call as f(observed, simulated); note HydroErr (he.nse) takes (simulated, observe
 import os
 import logging
 import tensorflow as tf
-import tensorflow_probability as tfp
-import tensorflow.keras.backend as kback
+import keras
+
+
+def correlation(x, y):
+	"""Pearson correlation of paired 1-D tensors; undefined for constant series."""
+	x = x - tf.reduce_mean(x)
+	y = y - tf.reduce_mean(y)
+	return tf.reduce_mean((x / tf.math.reduce_std(x)) * (y / tf.math.reduce_std(y)))
+
+
+def nearest_percentile(values, q):
+	"""Nearest interpolation, including round-to-even ties, as used by the scores."""
+	values = tf.sort(tf.reshape(values, [-1]))
+	n = tf.size(values)
+	index = tf.cast(tf.round(tf.cast(n - 1, tf.float64) * (tf.cast(q, tf.float64) / 100.0)), tf.int32)
+	return tf.cond(n > 0, lambda: tf.gather(values, tf.clip_by_value(index, 0, n - 1)),
+		lambda: tf.constant(float("nan"), dtype=values.dtype))
 
 
 
@@ -46,7 +61,7 @@ def nse(y_true, y_pred,*, cast=True):
 
 	numerator = tf.reduce_sum(tf.square(y_true - y_pred))
 	denominator = tf.reduce_sum(tf.square(y_true - tf.reduce_mean(y_true)))
-	nse = 1 - numerator / (denominator + kback.epsilon())  # Add a small constant to prevent division by zero
+	nse = 1 - numerator / (denominator + keras.config.epsilon())  # Add a small constant to prevent division by zero
 
 	return nse
 
@@ -63,11 +78,11 @@ def kge_metric(y_true, y_pred,*, cast=True):
 	y_true, y_pred = process_inputs(y_true, y_pred, cast=cast)
 	obs_mean = tf.reduce_mean(y_true)
 	sim_mean = tf.reduce_mean(y_pred)
-	obs_std = tf.math.reduce_std(y_true) + kback.epsilon()
-	sim_std = tf.math.reduce_std(y_pred) + kback.epsilon()
-	correlation = tfp.stats.correlation(y_true, y_pred, sample_axis=0, event_axis=None)
+	obs_std = tf.math.reduce_std(y_true) + keras.config.epsilon()
+	sim_std = tf.math.reduce_std(y_pred) + keras.config.epsilon()
+	r = correlation(y_true, y_pred)
 	beta = tf.math.divide_no_nan(sim_mean, obs_mean) + tf.cast(tf.equal(obs_mean, 0), sim_mean.dtype)
-	kge = 1 - tf.sqrt((correlation - 1) ** 2 + (sim_std / obs_std - 1) ** 2 + (beta - 1) ** 2)
+	kge = 1 - tf.sqrt((r - 1) ** 2 + (sim_std / obs_std - 1) ** 2 + (beta - 1) ** 2)
 
 	return kge
 
@@ -87,8 +102,8 @@ def kge_metric_components(y_true, y_pred,*, cast=True):
 	sim_std = tf.math.reduce_std(y_pred) + 1e-10
 
 
-	correlation = tf.cast(
-		tfp.stats.correlation(y_true, y_pred, sample_axis=0, event_axis=None),
+	r = tf.cast(
+		correlation(y_true, y_pred),
 		y_true.dtype)
 	beta = tf.cond(tf.not_equal(obs_mean, 0),
 		lambda: sim_mean / obs_mean,
@@ -98,14 +113,14 @@ def kge_metric_components(y_true, y_pred,*, cast=True):
 		lambda: tf.constant(1.0, dtype=y_true.dtype))
 
 
-	kge = 1 - tf.sqrt((correlation - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2)
+	kge = 1 - tf.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2)
 
 	if tf.executing_eagerly():
 		# Convert to numpy for eager execution (like in testing or logging)
-		return kge.numpy(), correlation.numpy(), alpha.numpy(), beta.numpy()
+		return kge.numpy(), r.numpy(), alpha.numpy(), beta.numpy()
 	else:
 		# Return as is for graph execution (like in training)
-		return kge, correlation, alpha, beta
+		return kge, r, alpha, beta
 
 def rve_metric(y_true, y_pred,*, cast=True):
 	"""RVE = (sum(p) - sum(o)) / sum(o), a fraction; opposite sign to pbias."""
@@ -124,7 +139,7 @@ def peak_flow_error(y_true, y_pred, threshold=95,*, cast=True):
 	"""mean(|p - o|) where o >= percentile(o, threshold); NaN if there are no peaks."""
 	y_true, y_pred = process_inputs(y_true, y_pred, cast=cast)
 
-	percentile_value = tfp.stats.percentile(y_true, threshold)
+	percentile_value = nearest_percentile(y_true, threshold)
 	peaks = y_true >= percentile_value
 	errors = tf.boolean_mask(tf.abs(y_pred - y_true), peaks)
 	error = tf.cond(tf.size(errors) > 0, lambda: tf.reduce_mean(errors), lambda: tf.constant(float("nan"), errors.dtype))
@@ -205,7 +220,7 @@ def peak_prediction_accuracy(y_true, y_pred, threshold,*, cast=True):
 
 	y_true, y_pred = process_inputs(y_true, y_pred, cast=cast)
 	# Determining the threshold value for peaks
-	percentile_value = tfp.stats.percentile(y_true, threshold)
+	percentile_value = nearest_percentile(y_true, threshold)
 
 	# Identifying peaks
 	true_peaks = tf.greater_equal(y_true, percentile_value)
@@ -244,7 +259,7 @@ def msle_loss(y_true, y_pred,*, cast=True):
 
 	y_true, y_pred = process_inputs(y_true, y_pred, cast=cast)
 
-	msle = tf.keras.losses.mean_squared_logarithmic_error(y_true, y_pred)
+	msle = keras.losses.mean_squared_logarithmic_error(y_true, y_pred)
 	if tf.executing_eagerly():
 		# Convert to numpy for eager execution (like in testing or logging)
 		return msle.numpy()
@@ -256,13 +271,13 @@ def rmse_metric(y_true, y_pred,*, cast=True):
 
 	y_true, y_pred = process_inputs(y_true, y_pred, cast=cast)
 
-	return kback.sqrt(kback.mean(kback.square(y_pred - y_true), axis=-1))
+	return tf.sqrt(tf.reduce_mean(tf.square(y_pred - y_true), axis=-1))
 
 def rmse(y_true, y_pred,*, cast=True):
 
 	y_true, y_pred = process_inputs(y_true, y_pred, cast=cast)
 
-	return kback.sqrt(kback.mean(kback.square(y_pred - y_true), axis=-1))
+	return tf.sqrt(tf.reduce_mean(tf.square(y_pred - y_true), axis=-1))
 
 
 if __name__ == "__main__":

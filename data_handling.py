@@ -12,9 +12,9 @@ import logging
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import keras
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, PowerTransformer, QuantileTransformer, MaxAbsScaler
-import fastparquet
 import copy
 from nan_imputer import NaNImputer
 from output_paths import append_lines_locked
@@ -350,7 +350,7 @@ class WindowGenerator():
 		print(f"Batch size: {self.batch_size}")
 
 
-		ds = tf.keras.utils.timeseries_dataset_from_array(
+		ds = keras.utils.timeseries_dataset_from_array(
 			data=self._table(data, split),
 			targets=None,
 			sequence_length=self.total_window_size,
@@ -659,14 +659,14 @@ def readData(testname, filename, label_tag="_Label", input_seq_length = 24, outp
 
 	# 'Day sin/cos': day of year (annual cycle)
 	if "day_of_year" in features:
-		day_of_year = date_time.dt.dayofyear
+		day_of_year = date_time.dt.day_of_year
 		df['Day sin'] = np.sin(2 * np.pi * day_of_year / 365.2425)
 		df['Day cos'] = np.cos(2 * np.pi * day_of_year / 365.2425)
 		time_columns += ['Day sin', 'Day cos']
 
 	# 'Week sin/cos': position in the week, Monday 00:00 = 0 (with the hour for sub-daily data)
 	if "day_of_week" in features:
-		week_position = (date_time.dt.dayofweek + (date_time.dt.hour + date_time.dt.minute / 60) / 24) / 7
+		week_position = (date_time.dt.day_of_week + (date_time.dt.hour + date_time.dt.minute / 60) / 24) / 7
 		df['Week sin'] = np.sin(2 * np.pi * week_position)
 		df['Week cos'] = np.cos(2 * np.pi * week_position)
 		time_columns += ['Week sin', 'Week cos']
@@ -845,9 +845,9 @@ def readData(testname, filename, label_tag="_Label", input_seq_length = 24, outp
 			print(f"{column}: {num_nans} NaNs")	
 
 	#remove 'Date' column from train_df, val_df and test_df
-	train_df.drop(columns=['Date'], inplace=True)
-	val_df.drop(columns=['Date'], inplace=True)
-	test_df.drop(columns=['Date'], inplace=True)
+	train_df = train_df.drop(columns=['Date'])
+	val_df = val_df.drop(columns=['Date'])
+	test_df = test_df.drop(columns=['Date'])
 
 	window = WindowGenerator(testname,input_steps=input_seq_length, label_steps=output_seq_length, shift=output_seq_offset,
 	 				train_df=train_df, val_df=val_df, test_df=test_df,
@@ -976,7 +976,7 @@ def load_table(filename, date_column="Date"):
 	"""Read a parquet, csv or tsv file; the time column `date_column` is renamed to 'Date'."""
 	ext = os.path.splitext(str(filename))[1].lower()
 	if ext in (".parquet", ".pq"):
-		df = fastparquet.ParquetFile(filename).to_pandas()
+		df = pd.read_parquet(filename, engine="pyarrow")
 	elif ext == ".csv":
 		df = pd.read_csv(filename)
 	elif ext in (".tsv", ".tab", ".txt"):
@@ -1042,7 +1042,7 @@ def remove_empty_columns(df, time_columns, labels_names, num_train, num_val, num
 
 	if(len(zero_std_columns) > 0):
 		print(f'Dropping columns with zero standard deviation: {zero_std_columns}')
-		df.drop(zero_std_columns, axis=1, inplace=True)
+		df = df.drop(columns=zero_std_columns)
 		print(f'Updated DataFrame shape: {df.shape}')
 
 	print("Current DataFrame columns:", df.columns)
@@ -1060,7 +1060,7 @@ def remove_empty_columns(df, time_columns, labels_names, num_train, num_val, num
 
 	if(len(constant_columns) > 0):
 		print(f'dropping constant columns: {constant_columns}')
-		df.drop(constant_columns, axis=1, inplace=True)
+		df = df.drop(columns=constant_columns)
 		print(f'df shape: {df.shape}')
 
 	#check the above conditions again, but for the train, val and test subsets of df
@@ -1075,7 +1075,7 @@ def remove_empty_columns(df, time_columns, labels_names, num_train, num_val, num
 
 	if(len(train_constant_columns) > 0):
 		print(f'dropping train_constant_columns: {train_constant_columns}')
-		df.drop(train_constant_columns, axis=1, inplace=True)
+		df = df.drop(columns=train_constant_columns)
 		print(f'df shape: {df.shape}')
 
 	val_constant_columns = df.iloc[num_train:num_train+num_val].columns[df.iloc[num_train:num_train+num_val].nunique() <= 1]
@@ -1086,7 +1086,7 @@ def remove_empty_columns(df, time_columns, labels_names, num_train, num_val, num
 			raise ValueError(f"Label column '{label}' has constant values in the validation set. This is likely an error in the data processing pipeline. Please check the data for issues.")
 	if(len(val_constant_columns) > 0):
 		print(f'dropping val_constant_columns: {val_constant_columns}')
-		df.drop(val_constant_columns, axis=1, inplace=True)
+		df = df.drop(columns=val_constant_columns)
 		print(f'df shape: {df.shape}')
 
 	test_constant_columns = df.iloc[num_train+num_val:].columns[df.iloc[num_train+num_val:].nunique() <= 1]
@@ -1100,7 +1100,7 @@ def remove_empty_columns(df, time_columns, labels_names, num_train, num_val, num
 	print(f'test_constant_columns: {test_constant_columns}')
 	if(len(test_constant_columns) > 0):
 		print(f'dropping test_constant_columns: {test_constant_columns}')
-		df.drop(test_constant_columns, axis=1, inplace=True)
+		df = df.drop(columns=test_constant_columns)
 		print(f'df shape: {df.shape}')
 
 	#check for all nan columns in df, train, val and test
@@ -1125,7 +1125,7 @@ def remove_empty_columns(df, time_columns, labels_names, num_train, num_val, num
 
 	if(len(nan_columns) > 0):
 		print(f'dropping nan columns: {nan_columns}')
-		df.drop(nan_columns, axis=1, inplace=True)
+		df = df.drop(columns=nan_columns)
 		print(f'df shape: {df.shape}')
 	
 	print("Current DataFrame columns:", df.columns)

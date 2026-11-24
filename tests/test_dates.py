@@ -16,7 +16,7 @@ def write(tmp_path, dates, name="d.parquet"):
 	rng = np.random.default_rng(0)
 	df = pd.DataFrame({"Date": dates, "rain": rng.gamma(1.0, size=n), "x_Label": 10 + np.sin(np.arange(n) / 10) + rng.normal(0, 0.1, n)})
 	path = tmp_path / name
-	df.to_parquet(path, engine="fastparquet")
+	df.to_parquet(path, engine="pyarrow")
 	return str(path), df
 
 

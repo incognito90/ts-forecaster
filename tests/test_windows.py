@@ -6,6 +6,7 @@ import sys
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import keras
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -38,7 +39,7 @@ def window_ids(ds):
 
 
 def test_all_windows_present_float32_and_reshuffled():
-	tf.keras.utils.set_random_seed(0)
+	keras.utils.set_random_seed(0)
 	w = make_window()
 	n_windows = ROWS - (IN_STEPS + SHIFT + OUT_STEPS) + 1
 	epoch1, epoch2 = window_ids(w.train_ds), window_ids(w.train_ds)

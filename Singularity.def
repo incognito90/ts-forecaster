@@ -1,25 +1,35 @@
-# Apptainer/Singularity container for ts-forecaster: Python 3.10, TensorFlow 2.13.0,
-# CUDA 11.8 / cuDNN 8.6 (NVIDIA pip packages), pinned versions from requirements.txt.
+# Apptainer/Singularity container for ts-forecaster: Python 3.13.18, TensorFlow 2.21.0,
+# CUDA 12.5 / cuDNN 9.3 (NVIDIA pip packages), pinned versions from requirements.txt.
 #
 # Build (from the repository root):
 #   apptainer build ts-forecaster.sif Singularity.def
 # Run:
-#   apptainer exec --nv ts-forecaster.sif python3 run.py --config configs/examples/grws_leggatt.yaml
+#   apptainer exec --nv --cleanenv ts-forecaster.sif python3 run.py --config configs/examples/grws_leggatt.yaml
 Bootstrap: docker
-From: ubuntu:22.04
+# Official python:3.13.18-slim-bookworm; pin the manifest for reproducible Python.
+From: python@sha256:f0fa218d5b06f9b9235024fa061cde2cb141f726de52134471053d2d9b5324a3
 
 %files
 	requirements.txt /opt/ts-forecaster/requirements.txt
 
 %post
 	export DEBIAN_FRONTEND=noninteractive
-	apt-get update && apt-get install -y --no-install-recommends python3 python3-pip git
+	# Debian packages from the snapshot the pinned base image was built from, so a rebuild
+	# installs the same versions (and fails rather than drifting if one is unavailable)
+	DEBIAN_SNAPSHOT=20261123T000000Z
+	sed -i -E "s|^URIs: http://deb.debian.org/(debian(-security)?)$|URIs: http://snapshot.debian.org/archive/\\1/$DEBIAN_SNAPSHOT|" \
+		/etc/apt/sources.list.d/debian.sources
+	apt-get -o Acquire::Check-Valid-Until=false update
+	apt-get install -y --no-install-recommends git=1:2.39.5-0+deb12u3 libgomp1=12.2.0-14+deb12u1
 	rm -rf /var/lib/apt/lists/*
-	python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+	dpkg-query -W -f '${Package}=${Version}\n' > /opt/ts-forecaster/installed-apt.txt
+	python3 -m pip install --no-cache-dir pip==26.3 setuptools==84.2.1 wheel==0.48.0
 	python3 -m pip install --no-cache-dir -r /opt/ts-forecaster/requirements.txt
+	python3 -m pip check
+	python3 -m pip freeze --all > /opt/ts-forecaster/installed.txt
 
 	# Point TensorFlow at the CUDA/cuDNN libraries installed by pip
-	NV=$(python3 -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
+	NV=$(python3 -c 'import nvidia; print(next(iter(nvidia.__path__)))')
 	LIBS=$(ls -d "$NV"/*/lib | paste -sd: -)
 	echo "export LD_LIBRARY_PATH=$LIBS\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" >> $APPTAINER_ENVIRONMENT
 	echo "export PATH=$NV/cuda_nvcc/bin:\$PATH" >> $APPTAINER_ENVIRONMENT
@@ -32,7 +42,10 @@ From: ubuntu:22.04
 
 %labels
 	Author Jason Kemp
-	Description "ts-forecaster: Python 3.10, TensorFlow 2.13.0, CUDA 11.8, pinned dependencies."
+	Description "ts-forecaster: Python 3.13.18, TensorFlow 2.21.0, Keras 3, CUDA 12.5, pinned dependencies."
+
+%test
+	python3 -m pip check
 
 %runscript
 	exec python3 "$@"

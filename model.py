@@ -6,10 +6,13 @@ plus the losses, callbacks and training loop used by predictor_main.py.
 """
 
 import os
+import tempfile
 import time
 import datetime
 import logging
 import tensorflow as tf
+import keras
+import h5py
 from typing import Union, Optional # for type hinting in function definition arguments
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,17 +25,18 @@ heartbeat_interval = 100
 
 # const mapping used for initializing layers
 INITIALIZER_MAPPING = {
-	"zeros": tf.keras.initializers.Zeros,
-	"ones": tf.keras.initializers.Ones,
-	"random_normal": tf.keras.initializers.RandomNormal,
-	"random_uniform": tf.keras.initializers.RandomUniform,
-	"glorot_normal": tf.keras.initializers.GlorotNormal,
-	"glorot_uniform": tf.keras.initializers.GlorotUniform,
-	"he_normal": tf.keras.initializers.HeNormal,
-	"he_uniform": tf.keras.initializers.HeUniform
+	"zeros": keras.initializers.Zeros,
+	"ones": keras.initializers.Ones,
+	"random_normal": keras.initializers.RandomNormal,
+	"random_uniform": keras.initializers.RandomUniform,
+	"glorot_normal": keras.initializers.GlorotNormal,
+	"glorot_uniform": keras.initializers.GlorotUniform,
+	"he_normal": keras.initializers.HeNormal,
+	"he_uniform": keras.initializers.HeUniform
 }
 
-class ConditionalNoise(tf.keras.layers.Layer):
+@keras.utils.register_keras_serializable(package="ts_forecaster")
+class ConditionalNoise(keras.layers.Layer):
 	"""Gaussian noise on non-zero inputs only, during training (identity at inference)."""
 	def __init__(self, stddev, **kwargs):
 		name = kwargs.pop('name', 'noise_on_non_zero')
@@ -46,10 +50,53 @@ class ConditionalNoise(tf.keras.layers.Layer):
 			return inputs + tf.where(tf.equal(inputs, 0), tf.zeros_like(inputs), noise)
 		return inputs
 
+	def get_config(self):
+		return dict(super().get_config(), stddev=self.stddev)
+
 def get_lr_metric(optimizer): #for printing learning rate during training
 	def lr(y_true, y_pred):
 		return optimizer.learning_rate
 	return lr
+
+
+def resolve_model_path(path):
+	"""A run's model directory or its model.keras file -> the Keras archive."""
+	path = os.fspath(path)
+	if not os.path.isdir(path):
+		return path
+	archive = os.path.join(path, "model.keras")
+	if not os.path.exists(archive):
+		if os.path.exists(os.path.join(path, "saved_model.pb")):
+			raise FileNotFoundError(f"{path} is a TensorFlow SavedModel from an older version; "
+				"this version reads only .keras models. Retrain the model.")
+		raise FileNotFoundError(f"No model.keras in {path}.")
+	return archive
+
+
+def _weights_layout(path):
+	"""(name, shape) of every model array in a .weights.h5 file (not the optimizer state saved in training)."""
+	layout = []
+	with h5py.File(path, "r") as f:
+		f.visititems(lambda name, obj: layout.append((name, obj.shape)) if isinstance(obj, h5py.Dataset) else None)
+	return {(name, shape) for name, shape in layout if not name.startswith("optimizer/")}
+
+
+def load_checkpoint_weights(model, path):
+	"""Load a .weights.h5 checkpoint, raising ValueError unless it has exactly the model's weights.
+
+	Keras only checks the weights the model asks for: a checkpoint with extra layers (e.g. from a
+	model with more LSTM layers) would otherwise load without an error.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		own = os.path.join(tmp, "model.weights.h5")
+		model.save_weights(own)
+		expected = _weights_layout(own)
+	found = _weights_layout(path)
+	if found != expected:
+		raise ValueError(f"{len(expected - found)} weight arrays of the model are not in the checkpoint "
+			f"and {len(found - expected)} arrays of the checkpoint are not in the model "
+			f"(e.g. {sorted(expected ^ found)[:3]}).")
+	model.load_weights(path)
 
 
 def load_Model(filename, learning_rate=None):
@@ -59,13 +106,13 @@ def load_Model(filename, learning_rate=None):
 	"""
 	print("Model Loading from: ", filename)
 	if learning_rate is None or learning_rate == -1:
-		opt = tf.keras.optimizers.Adam()
+		opt = keras.optimizers.Adam()
 	else:
-		opt = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+		opt = keras.optimizers.Adam(learning_rate=learning_rate)
 	lr_metric = get_lr_metric(opt)
 
-	model = tf.keras.models.load_model(
-		filename, 
+	model = keras.models.load_model(
+		resolve_model_path(filename),
 		custom_objects={"lr": lr_metric, "ConditionalNoise": ConditionalNoise, "rmse": rmse, "nse": nse, "kge_loss": kge_loss, "nse_loss": nse_loss},
 		compile=False
 	)
@@ -145,19 +192,19 @@ def create_lstm_model(num_layers: int,
 	
 	# Set up kernel_regularizer
 	if l1_regularization is not None and l2_regularization is not None: #elastic net
-		lstm_args['kernel_regularizer'] = tf.keras.regularizers.l1_l2(l1=l1_regularization, l2=l2_regularization)
+		lstm_args['kernel_regularizer'] = keras.regularizers.l1_l2(l1=l1_regularization, l2=l2_regularization)
 	elif l1_regularization is not None: #l1 aka lasso
-		lstm_args['kernel_regularizer'] = tf.keras.regularizers.l1(l1_regularization)
+		lstm_args['kernel_regularizer'] = keras.regularizers.l1(l1_regularization)
 	elif l2_regularization is not None: #l2 aka ridge
-		lstm_args['kernel_regularizer'] = tf.keras.regularizers.l2(l2_regularization)
+		lstm_args['kernel_regularizer'] = keras.regularizers.l2(l2_regularization)
 
 	# Set up recurrent_regularizer
 	if recurrent_l1_regularization is not None and recurrent_l2_regularization is not None: #elastic net
-		lstm_args['recurrent_regularizer'] = tf.keras.regularizers.l1_l2(l1=recurrent_l1_regularization, l2=recurrent_l2_regularization)
+		lstm_args['recurrent_regularizer'] = keras.regularizers.l1_l2(l1=recurrent_l1_regularization, l2=recurrent_l2_regularization)
 	elif recurrent_l1_regularization is not None: #l1 aka lasso
-		lstm_args['recurrent_regularizer'] = tf.keras.regularizers.l1(recurrent_l1_regularization)
+		lstm_args['recurrent_regularizer'] = keras.regularizers.l1(recurrent_l1_regularization)
 	elif recurrent_l2_regularization is not None: #l2 aka ridge
-		lstm_args['recurrent_regularizer'] = tf.keras.regularizers.l2(recurrent_l2_regularization)
+		lstm_args['recurrent_regularizer'] = keras.regularizers.l2(recurrent_l2_regularization)
 
 
 	dense_args = {
@@ -170,18 +217,18 @@ def create_lstm_model(num_layers: int,
 
 
 	if dense_l1_regularization is not None and dense_l2_regularization is not None: #elastic net
-		dense_args['kernel_regularizer'] = tf.keras.regularizers.l1_l2(l1=dense_l1_regularization, l2=dense_l2_regularization)
+		dense_args['kernel_regularizer'] = keras.regularizers.l1_l2(l1=dense_l1_regularization, l2=dense_l2_regularization)
 	elif dense_l1_regularization is not None: #l1 aka lasso
-		dense_args['kernel_regularizer'] = tf.keras.regularizers.l1(dense_l1_regularization)
+		dense_args['kernel_regularizer'] = keras.regularizers.l1(dense_l1_regularization)
 	elif dense_l2_regularization is not None: #l2 aka ridge
-		dense_args['kernel_regularizer'] = tf.keras.regularizers.l2(dense_l2_regularization)
+		dense_args['kernel_regularizer'] = keras.regularizers.l2(dense_l2_regularization)
 
 	# new initializer instance per layer: a reused unseeded instance gives every
 	# same-shaped layer the same starting weights
 	def fresh_init(layer_args):
 		return dict(layer_args, kernel_initializer=INITIALIZER_MAPPING[weight_init]())
 
-	inputs = tf.keras.Input(shape=(features_steps, num_features), name='input_layer')
+	inputs = keras.Input(shape=(features_steps, num_features), name='input_layer')
 
 	if(noise_std > 1e-10):
 		x = ConditionalNoise(stddev=noise_std,name="conditional_noise")(inputs)
@@ -193,32 +240,32 @@ def create_lstm_model(num_layers: int,
 		return dict(fresh_init(lstm_args), dropout=input_dropout if i == 0 else dropout_rate)
 
 	for i in range(num_layers-1):
-		x = tf.keras.layers.LSTM(**layer_args(i), name=f"lstm_{i+1}_units_{n_units}")(x)
+		x = keras.layers.LSTM(**layer_args(i), name=f"lstm_{i+1}_units_{n_units}")(x)
 	
 		if batch_normalization: # replace with layer norm?
-			x = tf.keras.layers.LayerNormalization(name=f'layer_norm_{i+1}')(x)
+			x = keras.layers.LayerNormalization(name=f'layer_norm_{i+1}')(x)
 
 
 	lstm_args['return_sequences'] = False
 
 	if not decoder:
 		# direct: final hidden state -> one Dense for all label_steps x num_labels outputs
-		x = tf.keras.layers.LSTM(**layer_args(num_layers - 1), name=f"lstm_{num_layers}_units_{n_units}")(x)
-		x = tf.keras.layers.Dropout(dropout_rate, name=f'final_dropout')(x)
-		x = tf.keras.layers.Dense(**dense_args, name='dense')(x)
-		x = tf.keras.layers.Reshape((label_steps, num_labels), name='reshape', dtype='float32')(x)
+		x = keras.layers.LSTM(**layer_args(num_layers - 1), name=f"lstm_{num_layers}_units_{n_units}")(x)
+		x = keras.layers.Dropout(dropout_rate, name=f'final_dropout')(x)
+		x = keras.layers.Dense(**dense_args, name='dense')(x)
+		x = keras.layers.Reshape((label_steps, num_labels), name='reshape', dtype='float32')(x)
 	else:
 		# encoder-decoder: final hidden state repeated per output step, decoder LSTM starts
 		# from the encoder states, per-step Dense
-		x, state_h, state_c = tf.keras.layers.LSTM(**layer_args(num_layers - 1), return_state=True, name=f"encoder_lstm_{num_layers}_units_{n_units}")(x)
-		x = tf.keras.layers.Dropout(dropout_rate, name='final_dropout')(x)
-		x = tf.keras.layers.RepeatVector(label_steps, name='repeat_output_steps')(x)
+		x, state_h, state_c = keras.layers.LSTM(**layer_args(num_layers - 1), return_state=True, name=f"encoder_lstm_{num_layers}_units_{n_units}")(x)
+		x = keras.layers.Dropout(dropout_rate, name='final_dropout')(x)
+		x = keras.layers.RepeatVector(label_steps, name='repeat_output_steps')(x)
 		decoder_args = dict(lstm_args, return_sequences=True, kernel_initializer=INITIALIZER_MAPPING[weight_init]())
-		x = tf.keras.layers.LSTM(**decoder_args, name=f"decoder_lstm_units_{n_units}")(x, initial_state=[state_h, state_c])
+		x = keras.layers.LSTM(**decoder_args, name=f"decoder_lstm_units_{n_units}")(x, initial_state=[state_h, state_c])
 		step_dense_args = dict(dense_args, units=num_labels, kernel_initializer=INITIALIZER_MAPPING[weight_init]())
-		x = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(**step_dense_args), name='dense_per_step', dtype='float32')(x)
+		x = keras.layers.TimeDistributed(keras.layers.Dense(**step_dense_args), name='dense_per_step', dtype='float32')(x)
 
-	model = tf.keras.models.Model(inputs=inputs, outputs=x, name='lstm_model')
+	model = keras.models.Model(inputs=inputs, outputs=x, name='lstm_model')
 
 	return model
 
@@ -230,7 +277,7 @@ MODEL_BUILDERS = {
 }
 
 
-class VRAMUsageCallback(tf.keras.callbacks.Callback):
+class VRAMUsageCallback(keras.callbacks.Callback):
 	"""Peak GPU memory (bytes) over the training run."""
 	def __init__(self):
 		super(VRAMUsageCallback, self).__init__()
@@ -254,7 +301,7 @@ class VRAMUsageCallback(tf.keras.callbacks.Callback):
 		"""Return the highest VRAM usage recorded."""
 		return self.peak_vram_usage
 
-class OneCycleScheduler(tf.keras.callbacks.Callback):
+class OneCycleScheduler(keras.callbacks.Callback):
 	"""Triangular cyclical learning rate (Smith 2017), set at every batch.
 
 	Rises linearly from lr_min (default lr_max / 10) to lr_max over half a cycle, falls back over
@@ -280,12 +327,7 @@ class OneCycleScheduler(tf.keras.callbacks.Callback):
 		lr = self.calc_lr(self._global_step)
 		self.lrates.append(lr)
 		opt = self.model.optimizer
-		try:
-			tf.keras.backend.set_value(opt.learning_rate, lr)
-		except Exception:
-			# handle mixed-precision LossScaleOptimizer
-			if hasattr(opt, 'inner_optimizer'):
-				tf.keras.backend.set_value(opt.inner_optimizer.learning_rate, lr)
+		opt.learning_rate.assign(lr)
 		self._global_step += 1
 	
 	def calc_lr(self, step):
@@ -300,7 +342,7 @@ class OneCycleScheduler(tf.keras.callbacks.Callback):
 	
 
 
-class LoggingCallback(tf.keras.callbacks.Callback):
+class LoggingCallback(keras.callbacks.Callback):
 	"""Per-epoch summary for the job logs (printed to stdout)."""
 	def __init__(self, logger, vram_callback=None, best_epoch_tracker=None, patience=None, patience_metric="val_loss", early_stopping=None):
 		super().__init__()
@@ -403,7 +445,7 @@ class LoggingCallback(tf.keras.callbacks.Callback):
 	def on_train_end(self, logs=None):
 		print("Training completed.")
 
-class Heartbeat(tf.keras.callbacks.Callback):
+class Heartbeat(keras.callbacks.Callback):
 	"""Print a progress line every `every` batches so long SLURM jobs show activity."""
 	def __init__(self, every=50, num_batches=None):
 		super().__init__()
@@ -440,10 +482,10 @@ def masked(fn, name):
 # --loss-function names; unknown names fall back to mse. nse and kge are minimised as
 # 1 - NSE and 1 - KGE, pooled over the batch, on the scaled targets.
 LOSS_MAPPING = {
-	"mse": masked(tf.keras.losses.mean_squared_error, "mse"),
-	"mae": masked(tf.keras.losses.mean_absolute_error, "mae"),
-	"mape": masked(tf.keras.losses.mean_absolute_percentage_error, "mape"),
-	"huber": masked(tf.keras.losses.huber, "huber"),
+	"mse": masked(keras.losses.mean_squared_error, "mse"),
+	"mae": masked(keras.losses.mean_absolute_error, "mae"),
+	"mape": masked(keras.losses.mean_absolute_percentage_error, "mape"),
+	"huber": masked(keras.losses.huber, "huber"),
 	"kge": kge_loss,
 	"nse": nse_loss
 }
@@ -452,7 +494,7 @@ LOSS_MAPPING = {
 # across trials: its scale depends on the loss function and it includes the regularisation penalties.
 TUNING_METRIC = "val_mse"
 
-class BestEpochTracker(tf.keras.callbacks.Callback):
+class BestEpochTracker(keras.callbacks.Callback):
 	"""Track the best epoch of `monitor` and restore its weights when training ends.
 
 	Also restores after reaching max_epochs or Optuna pruning, so the evaluated model is always
@@ -503,7 +545,7 @@ def create_callbacks(log_dir, min_epochs,max_epochs,learning_rate, patience, pat
 
 	# Add a csv logging callback to the list
 	if(log_dir is not None):
-		csv_logger = tf.keras.callbacks.CSVLogger(log_dir+"_training.log")
+		csv_logger = keras.callbacks.CSVLogger(log_dir+"_training.log")
 		callbacks.append(csv_logger)
 
 	# Add a VRAM usage callback if a GPU is available
@@ -527,13 +569,13 @@ def create_callbacks(log_dir, min_epochs,max_epochs,learning_rate, patience, pat
 		opt_kwargs["clipnorm"] = grad_clip_norm
 	if learning_rate is not None and learning_rate != -1:
 		opt_kwargs["learning_rate"] = learning_rate
-	base_opt = tf.keras.optimizers.Adam(**opt_kwargs)
+	base_opt = keras.optimizers.Adam(**opt_kwargs)
 	if learning_rate == -1:
 		callbacks.append(OneCycleScheduler(lr_max, onecycle_epochs, steps_per_epoch))
 
 	# Optuna pruning on TUNING_METRIC, independent of the loss and patience_metric
 	if(pruning is not None):
-		class OptunaCallback(tf.keras.callbacks.Callback):
+		class OptunaCallback(keras.callbacks.Callback):
 			def on_epoch_end(self, epoch, logs=None):
 				if pruning.epoch_end(epoch, (logs or {}).get(TUNING_METRIC)):
 					self.model.stop_training = True
@@ -548,7 +590,7 @@ def create_callbacks(log_dir, min_epochs,max_epochs,learning_rate, patience, pat
 
 	# Add an early stopping callback if patience is set
 	if(patience > -1):
-		early_stopping = tf.keras.callbacks.EarlyStopping(
+		early_stopping = keras.callbacks.EarlyStopping(
 			monitor=patience_metric, 
 			patience=patience, 
 			start_from_epoch=min_epochs, 
@@ -561,10 +603,10 @@ def create_callbacks(log_dir, min_epochs,max_epochs,learning_rate, patience, pat
 
 	# Add a ModelCheckpoint callback to save the best weights
 	if log_dir is not None:
-		checkpoint_filename = log_dir+"_best_weights_epoch.ckpt" #add _{val_loss:.2f} to filename to include val_loss in filename But need to change monitor in ModelCheckpoint and regex
+		checkpoint_filename = log_dir + "_best.weights.h5"
 
 		#select monitor mode based on patience_metric (val_loss, val_mse, val_mae, val_mape, val_rmse, val_nse)
-		cp_callback = tf.keras.callbacks.ModelCheckpoint(
+		cp_callback = keras.callbacks.ModelCheckpoint(
 			filepath=checkpoint_filename,
 			save_weights_only=True,
 			save_best_only=True, 

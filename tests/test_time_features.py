@@ -41,7 +41,7 @@ def test_selected_features_and_day_of_week_values(tmp_path):
 	w = read(write(tmp_path), time_features="day_of_week,time_of_day")
 	assert time_cols(w) == ["Time sin", "Time cos", "Week sin", "Week cos"]
 	df = pd.read_csv(write(tmp_path), parse_dates=["Date"])
-	pos = (df["Date"].dt.dayofweek + df["Date"].dt.hour / 24) / 7
+	pos = (df["Date"].dt.day_of_week + df["Date"].dt.hour / 24) / 7
 	assert pos.iloc[0] == 0.0 and pos.iloc[24] == pytest.approx(1 / 7)    # Monday 00:00, Tuesday 00:00
 
 

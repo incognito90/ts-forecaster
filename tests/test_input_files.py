@@ -33,7 +33,7 @@ def windows(w):
 
 def test_parquet_csv_and_tsv_give_identical_windows(tmp_path):
 	df = frame()
-	df.to_parquet(tmp_path / "d.parquet", engine="fastparquet")
+	df.to_parquet(tmp_path / "d.parquet", engine="pyarrow")
 	df.to_csv(tmp_path / "d.csv", index=False)
 	df.to_csv(tmp_path / "d.tab", index=False, sep="\t")
 	ref_x, ref_obs = windows(read(tmp_path / "d.parquet"))

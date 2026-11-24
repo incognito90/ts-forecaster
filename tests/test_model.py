@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import pytest
 import tensorflow as tf
+import keras
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -61,21 +62,23 @@ def test_layers_start_from_different_weights():
 
 @pytest.mark.parametrize("decoder", [False, True])
 def test_mixed_precision_regression_loss_stays_float32(decoder):
-	policy = tf.keras.mixed_precision.global_policy()
-	floatx = tf.keras.backend.floatx()
+	policy = keras.mixed_precision.global_policy()
+	floatx = keras.backend.floatx()
 	try:
-		tf.keras.backend.set_floatx("float16")
-		tf.keras.mixed_precision.set_global_policy("mixed_float16")
+		# Keras 3 uses floatx for the compiled loss dtype. Mixed precision changes
+		# layer compute only; the project's global floatx must remain float32.
+		keras.backend.set_floatx("float32")
+		keras.mixed_precision.set_global_policy("mixed_float16")
 		model = create_lstm_model(1, 4, 0.0, 1, 3, 1, 2, noise_std=0.0, decoder=decoder)
 		model.compile(optimizer="adam", loss="mse")
 		with tf.GradientTape() as tape:
 			pred = model(tf.zeros((2, 3, 1), dtype=tf.float32))
-			loss = model.compiled_loss(tf.fill((2, 2, 1), 300.0), pred)
+			loss = model.compute_loss(y=tf.fill((2, 2, 1), 300.0), y_pred=pred)
 		assert pred.dtype == tf.float32 and loss.dtype == tf.float32
 		assert float(loss) == pytest.approx(90000.0)  # exceeds float16's range
 		gradients = tape.gradient(loss, model.trainable_weights)
 		assert all(g is not None and np.isfinite(g.numpy()).all() for g in gradients)
-		assert any(l.compute_dtype == "float16" for l in model.layers if isinstance(l, tf.keras.layers.LSTM))
+		assert any(l.compute_dtype == "float16" for l in model.layers if isinstance(l, keras.layers.LSTM))
 	finally:
-		tf.keras.backend.set_floatx(floatx)
-		tf.keras.mixed_precision.set_global_policy(policy)
+		keras.backend.set_floatx(floatx)
+		keras.mixed_precision.set_global_policy(policy)

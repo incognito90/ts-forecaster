@@ -44,6 +44,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import keras
 import yaml
 
 import re
@@ -66,6 +67,8 @@ from model import (
 	MODEL_BUILDERS,
 	get_lr_metric,
 	ConditionalNoise,
+	resolve_model_path,
+	load_checkpoint_weights,
 )
 from metrics import (
 	rmse,
@@ -126,10 +129,10 @@ def build_window(args):
 	half_float = str_to_bool(args.half_float)
 
 	if half_float:
-		policy = tf.keras.mixed_precision.Policy("mixed_float16")
-		tf.keras.mixed_precision.set_global_policy(policy)
+		policy = keras.mixed_precision.Policy("mixed_float16")
+		keras.mixed_precision.set_global_policy(policy)
 	# floatx stays float32, as in predictor_main.py
-	tf.keras.backend.set_floatx("float32")
+	keras.backend.set_floatx("float32")
 
 	window = dh.readData(
 		args.test_name,
@@ -184,13 +187,10 @@ def build_model(args, window):
 
 
 def normalize_checkpoint_path(checkpoint_path):
-	"""Strip the .index / .data-* suffix from a checkpoint path."""
+	"""Validate the current Keras weights format before rebuilding a model."""
 	checkpoint_path = str(checkpoint_path)
-
-	for suffix in [".index", ".data-00000-of-00001"]:
-		if checkpoint_path.endswith(suffix):
-			checkpoint_path = checkpoint_path[: -len(suffix)]
-
+	if not checkpoint_path.endswith(".weights.h5"):
+		raise ValueError("--checkpoint requires a .weights.h5 file from the current runtime; retrain older checkpoints.")
 	return checkpoint_path
 
 
@@ -301,7 +301,7 @@ def write_feature_metadata(window, output_dir):
 
 def get_custom_objects():
 	"""custom_objects for loading models saved by predictor_main.py."""
-	opt = tf.keras.optimizers.Adam()
+	opt = keras.optimizers.Adam()
 	lr_metric = get_lr_metric(opt)
 
 	return {
@@ -365,12 +365,12 @@ def sample_dataset_windows(dataset, max_batches, sample_size, seed, valid_window
 
 def make_scalar_output_model(model, horizon_index, label_index):
 	"""Wrap the model so it outputs one (horizon, label) only, shape (batch, 1)."""
-	output = tf.keras.layers.Lambda(
+	output = keras.layers.Lambda(
 		lambda y: y[:, horizon_index:horizon_index + 1, label_index],
 		name=f"shap_output_h{horizon_index + 1}_label{label_index}"
 	)(model.output)
 
-	return tf.keras.Model(inputs=model.input, outputs=output)
+	return keras.Model(inputs=model.inputs, outputs=output)
 
 
 def normalize_shap_values(shap_values):
@@ -1238,8 +1238,8 @@ def main(args):
 
 	if args.saved_model is not None:
 		print(f"Loading full saved model from: {args.saved_model}")
-		model = tf.keras.models.load_model(
-			args.saved_model,
+		model = keras.models.load_model(
+			resolve_model_path(args.saved_model),
 			compile=False,
 			custom_objects=get_custom_objects(),
 		)
@@ -1252,13 +1252,10 @@ def main(args):
 		checkpoint_path = normalize_checkpoint_path(args.checkpoint)
 		print(f"Loading checkpoint weights from: {checkpoint_path}")
 
-		# expect_partial: the optimizer state is not needed. But every model variable
-		# must be restored, otherwise a model rebuilt with the wrong settings silently
-		# keeps some layers at their initial weights.
-		status = model.load_weights(checkpoint_path).expect_partial()
 		try:
-			status.assert_existing_objects_matched()
-		except AssertionError as e:
+			# every model weight must come from the checkpoint and every checkpoint weight be used
+			load_checkpoint_weights(model, checkpoint_path)
+		except ValueError as e:
 			sys.exit(f"Error: the checkpoint {checkpoint_path} does not match the model rebuilt from these "
 				f"settings (some layers would keep their initial weights). Use the settings of the training "
 				f"run, e.g. its <output-dir>/configs/<run>.yaml or best_config.yaml.\n{e}")
@@ -1427,7 +1424,7 @@ def build_parser():
 	parser.add_argument("--mode", default=None, help=argparse.SUPPRESS)  # passed on by run.py; ignored
 
 	parser.add_argument("--filename", default=None, help="Dataset file the model was trained on. Required.")
-	parser.add_argument("--saved-model", default=None, help="Path to a fully saved Keras model (SavedModel folder). If provided, --checkpoint is ignored.")
+	parser.add_argument("--saved-model", default=None, help="Path to a .keras model or its containing model directory. If provided, --checkpoint is ignored.")
 	parser.add_argument("--output-dir", default=None, help="Output folder. Default: outputs/shap/<test-name> (with --config: <run.output_dir>/shap or outputs/<run.name>/shap).")
 	parser.add_argument("--test-name", default="checkpoint_explainability_test", help="Run name, used in the output file names. Default: checkpoint_explainability_test.")
 
@@ -1476,7 +1473,7 @@ def build_parser():
 	parser.add_argument("--oversample-low-thresholds", type=none_or_float_list, default=None, help="Must match the training run. None or comma-separated floats, e.g. 0.1,0.05. Default: None.")
 
 
-	parser.add_argument("--checkpoint", default=None, help="Path to model checkpoint weights. Can include or omit suffixes like .index or .data-00000-of-00001.")
+	parser.add_argument("--checkpoint", default=None, help="Path to a .weights.h5 checkpoint. Model settings must match the training run.")
 
 	parser.add_argument("--model-type", default="lstm", help="Model architecture, a name in model.MODEL_BUILDERS (only with --checkpoint). Default: lstm.")
 	parser.add_argument("--decoder", type=str_to_bool, default=False, help="Whether the model was trained with --decoder True (only with --checkpoint). Default: False.")

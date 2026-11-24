@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import tensorflow as tf
+import keras
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,12 +15,12 @@ from model import BestEpochTracker, create_callbacks
 
 
 def test_best_weights_restored_without_early_stopping():
-	tf.keras.utils.set_random_seed(3)
+	keras.utils.set_random_seed(3)
 	x = np.random.normal(size=(256, 4)).astype("float32")
 	y = (x @ np.array([1.0, -2.0, 0.5, 0.0], dtype="float32"))[:, None]
 	xv, yv = x[:64] + 0.1, y[:64]
-	model = tf.keras.Sequential([tf.keras.layers.Dense(8, activation="relu"), tf.keras.layers.Dense(1)])
-	model.compile(optimizer=tf.keras.optimizers.Adam(0.05), loss="mse")  # high rate: noisy val_loss
+	model = keras.Sequential([keras.layers.Dense(8, activation="relu"), keras.layers.Dense(1)])
+	model.compile(optimizer=keras.optimizers.Adam(0.05), loss="mse")  # high rate: noisy val_loss
 	tracker = BestEpochTracker(monitor="val_loss", mode="min")
 	hist = model.fit(x, y, validation_data=(xv, yv), epochs=25, batch_size=32, verbose=0, callbacks=[tracker])
 
@@ -34,7 +35,15 @@ def test_early_stopping_direction_matches_metric(metric, better):
 		log_dir=None, min_epochs=1, max_epochs=5, learning_rate=None, patience=3,
 		patience_metric=metric, grad_clip_norm=None,
 		window=SimpleNamespace(num_train_samples=100, batch_size=10), logger=logging.getLogger("t"))
-	assert early_stopping.monitor_op is better
+	# Check actual stopping behavior; Keras 3 creates monitor_op lazily and
+	# uses backend operations instead of NumPy function objects.
+	model = SimpleNamespace(stop_training=False)
+	early_stopping.set_model(model)
+	early_stopping.on_train_begin()
+	values = [1.0, 0.5, 1.0, 1.0, 1.0] if better is np.less else [1.0, 2.0, 1.0, 1.0, 1.0]
+	for epoch, value in enumerate(values, start=1):
+		early_stopping.on_epoch_end(epoch, {metric: value})
+		assert model.stop_training == (epoch == 5)
 	assert tracker.mode == ("min" if better is np.less else "max")
 
 
@@ -42,7 +51,7 @@ def test_compile_and_fit_reports_restored_epoch_without_early_stopping():
 	import pandas as pd
 	from data_handling import WindowGenerator
 	from model import compile_and_fit, create_lstm_model
-	tf.keras.utils.set_random_seed(0)
+	keras.utils.set_random_seed(0)
 	rng = np.random.default_rng(0)
 	def frame(n, start):
 		t = np.arange(start, start + n)

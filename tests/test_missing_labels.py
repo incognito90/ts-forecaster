@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import tensorflow as tf
+import keras
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -72,7 +73,7 @@ def test_masked_loss_skips_missing_labels():
 	y_pred = tf.constant([[[2.0], [100.0]], [[3.0], [3.0]]])
 	assert float(LOSS_MAPPING["mse"](y_true, y_pred)) == pytest.approx((1 + 0 + 4) / 3)
 	assert float(LOSS_MAPPING["mae"](y_true, y_pred)) == pytest.approx((1 + 0 + 2) / 3)
-	assert float(masked(tf.keras.losses.mean_squared_error, "x")(tf.fill([2, 2, 1], np.nan), y_pred)) == 0.0
+	assert float(masked(keras.losses.mean_squared_error, "x")(tf.fill([2, 2, 1], np.nan), y_pred)) == 0.0
 	with tf.GradientTape() as tape:
 		p = tf.Variable(y_pred)
 		loss = LOSS_MAPPING["huber"](y_true, p)

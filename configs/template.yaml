@@ -254,6 +254,5 @@ explain:
   run_original_test: true
   # Test batches saved as x/y_test_scaled_sample.npy. Default: 4.
   max_test_batches_for_cache: 4
-  # Path to model checkpoint weights. Can include or omit suffixes like .index or
-  # .data-00000-of-00001.
+  # Path to a .weights.h5 checkpoint. Model settings must match the training run.
   checkpoint: null

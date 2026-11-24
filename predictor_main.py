@@ -53,8 +53,7 @@ import io
 sns.set_theme()
 
 import data_handling as dh
-from tensorflow import keras
-from tensorflow.keras import backend as kback
+import keras
 from model import (
 	MODEL_BUILDERS,
 	TUNING_METRIC,
@@ -112,10 +111,13 @@ def csv_line(fields):
 def evaluated_model_settings(args, model_dir):
 	"""Settings for the results.csv rows of a saved model in evaluate mode.
 
-	The model and training settings come from <model_dir>/run_config.yaml (blank if missing).
+	The model and training settings come from the model's run_config.yaml (blank if missing).
 	"""
 	record = argparse.Namespace(**vars(args))
 	keys = run_config.SECTIONS["model"] + run_config.SECTIONS["training"]
+	model_dir = os.fspath(model_dir)
+	if model_dir.endswith(".keras"):
+		model_dir = os.path.dirname(model_dir)
 	saved = os.path.join(model_dir, "run_config.yaml")
 	if not os.path.exists(saved):
 		logging.warning(f"{saved} not found: the model and training columns of these results.csv rows are left blank.")
@@ -382,7 +384,20 @@ def tuning_settings(args, search_entries):
 		"max_epochs", "min_epochs", "hyperparameter_optimization_repeat", "hyperparameter_optimization_repeat_method"]
 	settings = {k: getattr(args, k, None) for k in keys}
 	settings["search_space"] = search_entries
+	settings["runtime"] = {"python": sys.version.split()[0], "tensorflow": tf.__version__,
+		"keras": keras.__version__, "numpy": np.__version__, "pandas": pd.__version__, "optuna": optuna.__version__}
 	return json.loads(json.dumps(settings, default=str))
+
+
+def check_study_settings(study, settings):
+	"""Never mix trial scores across settings or runtimes, including unversioned studies."""
+	stored = study.user_attrs.get("settings")
+	if stored is None and not study.trials:
+		study.set_user_attr("settings", settings)
+	elif stored != settings:
+		differ = sorted(k for k in set(stored or {}) | set(settings) if (stored or {}).get(k) != settings.get(k))
+		raise ValueError(f"different or missing settings ({', '.join(differ)}). "
+			"Use another run name or output folder for a new search, or the original settings and runtime to resume it.")
 
 
 #create objective function for hyperparameter optimization with optuna
@@ -447,12 +462,12 @@ def objective(strategy, trial, name, nan_fill, transform_method, num_features, i
 		pruning.start_repeat()
 
 
-		kback.clear_session()  # Clear previous models, freeing memory and preventing naming issues
+		keras.backend.clear_session()  # Clear previous models, freeing memory and preventing naming issues
 		trainTime = None  # Before training
 		start_vram = track_vram()
 		start = time.time()
 		seed = run_seed(args.test_num) + i
-		tf.keras.utils.set_random_seed(seed)
+		keras.utils.set_random_seed(seed)
 
 		with strategy.scope():
 
@@ -550,8 +565,7 @@ def objective(strategy, trial, name, nan_fill, transform_method, num_features, i
 		del history
 		del predictions
 		gc.collect()
-		kback.clear_session()
-		tf.keras.backend.clear_session()
+		keras.backend.clear_session()
 
 	sorted_mse_scores = sorted(mse_scores)
 
@@ -735,7 +749,7 @@ def __main(args):
 	print("testNum: " + str(testNum))
 	# also seeds the optuna sampler
 	seed = run_seed(testNum)
-	tf.keras.utils.set_random_seed(seed)
+	keras.utils.set_random_seed(seed)
 	print("Random seed set to: " + str(seed))
 	# process-wide, so it covers every optuna trial too
 	if args.deterministic.lower() == "true":
@@ -882,19 +896,12 @@ def __main(args):
 		pruner = MedianPruner(n_startup_trials=PRUNER_STARTUP_TRIALS, n_warmup_steps=min_epochs, interval_steps=PRUNER_INTERVAL_STEPS)
 		sampler = optuna.samplers.TPESampler(seed=seed)
 		study = optuna.create_study(direction="minimize" , pruner=pruner, sampler=sampler, study_name=name, storage=storage_name, load_if_exists=True)
-		# only resume a study made with the same data and search settings
+		# Only resume scores from matching data, search settings and runtime.
 		study_settings = tuning_settings(args, search_entries)
-		stored = study.user_attrs.get("settings")
-		if stored is None:
-			if study.trials:
-				logging.warning(f"Optuna study '{name}' in {optuna_db_path} has no stored settings (made by an "
-					"older version); resuming it without checking that the data and search settings match.")
-			study.set_user_attr("settings", study_settings)
-		elif stored != study_settings:
-			differ = sorted(k for k in set(stored) | set(study_settings) if stored.get(k) != study_settings.get(k))
-			sys.exit(f"Error: the Optuna study '{name}' in {optuna_db_path} was made with different settings "
-				f"({', '.join(differ)}). Use another run name or output folder for a new search, or the "
-				"original settings to resume it.")
+		try:
+			check_study_settings(study, study_settings)
+		except ValueError as e:
+			sys.exit(f"Error: the Optuna study '{name}' in {optuna_db_path}: {e}")
 		
 		existing_trials = len([t for t in study.trials
                        if t.state in (TrialState.COMPLETE,
@@ -999,7 +1006,8 @@ def __main(args):
 		if(save_model):
 			model_path = os.path.join(paths.models, testName+test_uuid)
 			print("Saving model to: ", model_path)
-			model.save(model_path)
+			os.makedirs(model_path, exist_ok=True)
+			model.save(os.path.join(model_path, "model.keras"))
 			# used by evaluate mode
 			run_config.write_config(args, os.path.join(model_path, "run_config.yaml"))
 

@@ -13,8 +13,9 @@ to streamflow. Example river-flow and air-quality data are included.
 ## Requirements
 
 An NVIDIA GPU and [Apptainer](https://apptainer.org) (or Singularity). The
-container provides TensorFlow 2.13 with CUDA 11.8 and the pinned Python
-packages in `requirements.txt`.
+container provides Python 3.13.18, TensorFlow 2.21, Keras 3 and CUDA 12.5 /
+cuDNN 9.3, with the pinned packages in `requirements.txt`. The NVIDIA driver
+comes from the host; the container supplies the CUDA libraries.
 
 ## Install
 
@@ -23,10 +24,13 @@ git clone <this repository> ts-forecaster && cd ts-forecaster
 apptainer build ts-forecaster.sif Singularity.def
 ```
 
+Run with `--cleanenv` to keep host Python and CUDA environment settings out
+of the container. The image includes pytest for development checks.
+
 ## Quick start
 
 ```bash
-apptainer exec --nv ts-forecaster.sif python3 run.py --config configs/examples/grws_leggatt.yaml
+apptainer exec --nv --cleanenv ts-forecaster.sif python3 run.py --config configs/examples/grws_leggatt.yaml
 ```
 
 This forecasts the next 12 hours of river flow at the Leggatt gauge (Grand
@@ -39,11 +43,11 @@ same scores for the reference forecasts (`Persistence mae`, `Climatology mae`,
 The second example forecasts PM2.5 in Beijing 24 hours ahead:
 
 ```bash
-apptainer exec --nv ts-forecaster.sif python3 run.py --config configs/examples/air_quality.yaml
+apptainer exec --nv --cleanenv ts-forecaster.sif python3 run.py --config configs/examples/air_quality.yaml
 ```
 
 The commands below are shown as `python3 run.py ...`; run them the same way,
-inside the container (`apptainer exec --nv ts-forecaster.sif python3 run.py ...`).
+inside the container (`apptainer exec --nv --cleanenv ts-forecaster.sif python3 run.py ...`).
 
 ## Your own data
 
@@ -149,6 +153,19 @@ The skill against persistence is `1 - mse / Persistence mse`.
 Several runs can write to the same output folder; their rows are appended to
 the same `results.csv`.
 
+Saved models live in `models/<run>/model.keras`, alongside `run_config.yaml`.
+Pass that directory or the `.keras` file to `--trainedModelFile` in evaluate
+mode, or to `--saved-model` in explain mode. Best-epoch weights use
+`*_best.weights.h5`; explain mode accepts them through `--checkpoint` with
+the training configuration, and stops with an error if the checkpoint does not
+hold exactly the weights of the model built from those settings. Older
+TensorFlow SavedModel directories and `.ckpt` checkpoints are not supported by
+this runtime; retrain those models.
+
+Training results can differ from older TensorFlow versions even with the
+same seed. Record the container alongside the saved run configuration when
+comparing experiments.
+
 ## Tuning
 
 ```bash
@@ -168,6 +185,9 @@ the median of the finished trials at the same epoch.
 The best settings are written to `<output folder>/best_config.yaml`, and the
 final model is trained from it into `<output folder>/final/`. Running the same
 search again resumes it.
+
+Resuming also requires the same recorded runtime versions. After upgrading,
+use a new run name or output folder so old and new trial scores are not mixed.
 
 ## Explaining forecasts (SHAP)
 
